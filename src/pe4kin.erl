@@ -8,7 +8,7 @@
 -module(pe4kin).
 -export([api_call/2, api_call/3, download_file/2]).
 -export([launch_bot/3]).
--export([get_me/1, send_message/2, forward_message/2, send_photo/2, send_audio/2,
+-export([get_me/1, send_message/2, delete_message/2, edit_message_text/2, edit_message_reply_markup/2, forward_message/2, send_photo/2, send_audio/2,
          send_document/2, send_sticker/2, send_video/2, send_voice/2, send_location/2,
          send_venue/2, send_contact/2, send_chat_action/2, get_user_profile_photos/2,
          get_file/2, kick_chat_member/2, unban_chat_member/2, answer_callback_query/2,
@@ -69,6 +69,15 @@ get_me(Bot) ->
 
 send_message(Bot, #{chat_id := _, text := _} = Message) ->
     api_call(Bot, <<"sendMessage">>, {json, Message}).
+
+delete_message(Bot, #{chat_id := _, message_id := _} = Message) ->
+    api_call(Bot, <<"deleteMessage">>, {json, Message}).
+
+edit_message_text(Bot, #{chat_id := _, text := _} = Message) ->
+    api_call(Bot, <<"editMessageText">>, {json, Message}).
+
+edit_message_reply_markup(Bot, #{chat_id := _, reply_markup := _} = Message) ->
+    api_call(Bot, <<"editMessageReplyMarkup">>, {json, Message}).
 
 forward_message(Bot, #{chat_id := _, from_chat_id := _, message_id := _} = Req) ->
     api_call(Bot, <<"forwardMessage">>, {json, Req}).

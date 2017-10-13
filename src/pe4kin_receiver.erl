@@ -12,7 +12,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3]).
+-export([start_link/1, start_link/3]).
 -export([start_http_poll/2, stop_http_poll/1,
          start_set_webhook/3, stop_set_webhook/1]).
 -export([webhook_callback/3]).
@@ -89,12 +89,31 @@ get_updates(Bot, Limit) ->
 start_link(Bot, Token, Opts) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Bot, Token, Opts], []).
 
+start_link(Args) ->
+	Bot = proplists:get_value(bot, Args),
+    Token = proplists:get_value(token, Args),
+    Opts = proplists:get_value(opts, Args),
+	gen_server:start_link({local, ?MODULE}, ?MODULE, [Bot, Token, Opts], []).
 
 init([Bot, Token, Opts]) ->
+	process_flag(trap_exit, true),
+	Res = dets:open_file("telegram", [{repair, false}, {type,bag}]),
+	Subs = case Res of
+		{error, {needs_repair, FileName}} -> 
+			ok = file:delete(FileName),
+			{ok, _} = dets:open_file("telegram", [{repair, false}, {type,bag}]),
+			S = dets:lookup("telegram", subscribers), dets:delete_all_objects("telegram"), S;
+		_ -> S = dets:lookup("telegram", subscribers), dets:delete_all_objects("telegram"), S
+	end,
+	erlang:display("Subs"),
+	erlang:display(Subs),
+	erlang:display(ordsets:from_list(Subs)),
+	erlang:display("ref pe4kin receiver"),
+	erlang:display(self()),
     {ok, #state{name = Bot,
                 token = Token,
                 active = false,
-                subscribers = ordsets:new(),
+                subscribers = ordsets:from_list(Subs),
                 ulen = 0,
                 updates = queue:new(),
                 buffer_edge_size = maps:get(buffer_edge_size, Opts, 1000)}}.
@@ -143,7 +162,23 @@ handle_info({hackney_response, Ref, Msg}, #state{method_state=MState} = State) -
     error_logger:warning_msg("Unexpected hackney msg ~p, ~p; state ~p",
                              [Ref, Msg, MState]),
     {noreply, State};
-handle_info(_Info, State) ->
+%handle_info({hackney_response, _Ref, Msg}, #state{} = State) ->
+%    error_logger:warning_msg("Unexpected hackney msg ~p; state ~p",
+%                             [Msg, State]),
+%    {noreply, State};
+handle_info({'EXIT', Pid, Reason}, #state{subscribers=Subs}=State) ->
+	 %   ..code to handle exits here..
+	io:format("pe4kin handle exit ~p~n", [Reason]), 
+	dets:delete_all_objects("telegram"),
+	dets:close("telegram"),
+	{ok, _} = dets:open_file("telegram", [{repair, false}, {type,bag}]),
+	dets:insert("telegram", {subscribers, ordsets:to_list(Subs)}),
+	dets:sync("telegram"),
+	dets:close("telegram"),
+    {noreply, State};
+
+handle_info(Info, State) ->
+	io:format("pe4kin handle info ~p~n", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -198,16 +233,18 @@ do_stop_http_poll(#state{active=true, method=longpoll,
     {ok, _} = hackney:cancel_request(Ref),
     State#state{active=false, method_state=undefined}.
 
-
-handle_http_poll_msg({status, 200 = Status, _Reason},
+handle_http_poll_msg({status, 200, _Reason},
                      #state{method_state = #{state := start,
                                              status := undefined}=MState} = State) ->
-    {ok, State#state{method_state = MState#{state := status, status := Status}}};
+    {ok, State#state{method_state = MState#{state := status, status := 200}}};
 handle_http_poll_msg({status, Status, _Reason},
                      #state{method_state = MState, name = Name} = State) ->
-    error_logger:warning_msg("Bot ~p: longpool bad status ~p when state ~p",
-                             [Name, Status, MState]),
+	erlang:display("longpool"),
+	erlang:display(State),
+    %error_logger:warning_msg("Bot ~p: longpool bad status ~p when state ~p",
+    %                                                           [Name, Status, MState]),
     {invariant, State#state{method_state = undefined, active=false}};
+
 handle_http_poll_msg({headers, Headers},
                      #state{method_state = #{state := status,
                                              headers := undefined}=MState} = State) ->
@@ -228,11 +265,20 @@ handle_http_poll_msg(Chunk, #state{method_state = #{state := headers,
     {ok, State#state{method_state = MState#{state := body, body := Chunk}}};
 handle_http_poll_msg(Chunk, #state{method_state = #{state := body,
                                                     body := Body}=MState} = State) ->
-    {ok, State#state{method_state = MState#{body := [Body | Chunk]}}}.
+    {ok, State#state{method_state = MState#{body := [Body | Chunk]}}};
 
+handle_http_poll_msg(Chunk, #state{method_state = #{state := St,
+                                                    body := Body}=MState} = State) ->
+	erlang:display("hackney http poll msg"),
+	erlang:display("Chunk"),
+	erlang:display(Chunk),
+	erlang:display("State"),
+	erlang:display(State),
+    {invariant, State#state{method_state=undefined, active=false}}.
 
 push_updates(<<>>, State) -> State;
 push_updates(UpdatesBin, #state{last_update_id = LastID, updates = UpdatesQ, ulen = ULen} = State) ->
+	try
     case jiffy:decode(UpdatesBin, [return_maps]) of
         [] -> State;
         #{<<"ok">> := true, <<"result">> := []} -> State;
@@ -243,8 +289,12 @@ push_updates(UpdatesBin, #state{last_update_id = LastID, updates = UpdatesQ, ule
             NewUpdatesQ = queue:from_list(NewUpdates),
             UpdatesQ1 = queue:join(UpdatesQ, NewUpdatesQ),
             State#state{last_update_id = NewLastID, updates = UpdatesQ1,
-                        ulen = ULen + length(NewUpdates)}
-    end.
+                        ulen = ULen + length(NewUpdates)};
+		_ -> State
+    end
+	catch
+		E1:E2 -> erlang:display(E1), erlang:display(E2), State
+	end.
 
 pull_updates(_, #state{ulen = 0} = State) -> {[], State};
 pull_updates(1, #state{updates = UpdatesQ, ulen = ULen} = State) ->

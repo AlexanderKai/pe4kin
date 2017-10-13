@@ -1,6 +1,6 @@
 {application, pe4kin,
  [{description, "Telegram messenger bot API wrapper"},
-  {vsn, "0.1.1"},
+  {vsn, "0.1.0"},
   {registered, []},
   {mod, { pe4kin_app, []}},
   {applications,
@@ -14,5 +14,5 @@
 
   {maintainers, ["Sergey Prokhorov"]},
   {licenses, ["Apache 2.0"]},
-  {links, [{"Github", "https://github.com/seriyps/pe4kin"}]}
+  {links, []}
  ]}.
